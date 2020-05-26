@@ -30,7 +30,7 @@ Notes on CSV file format:
 - Column 2 contains the label to be predicted (regression: real, continuous; classification: positive integers with 0 = base class)
 - Columns 3...N contain the feature values, with the column header containing the feature label (assumed already preprocessed)
   
-**Output**:  
+**Output Files**:  
 {outputPrefix}\_SLCoefs\_{PRED_VAR_NAME}\_cv{kCVParam}\_simsPI{numSimsPI}.csv
 - Stacked generalizer (aka "Super Learner") coefficients learned for each train/test batch and submodel
 - Rows: batch/submodel combinations
