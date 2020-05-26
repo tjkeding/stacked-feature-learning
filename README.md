@@ -54,14 +54,14 @@ Notes on CSV file format:
 ## Analysis Summary:
 The analysis pipeline consists of:
 
-### Building and Training the Stacked Generalizer (Super Learner)
+### Building the Stacked Generalizer (Super Learner)
 ------
 1) Multiple machine learning algorithms\* (submodels) are tuned using randomized parameter search with cross-validation and trained on the current batches' full training set. Submodels currently available include elastic net trained with stochastic gradient decsent (glm), non-linear support vector machine (svm), multilayer perceptron (mlp), random forest (randForest), and gradient boosting machine (gradBoost). All submodels aside from the random forest and gradient boosting machines are built in a bagging (bootstrap aggregation) ensemble to ensure comparable performance to random forest and gradient boosting. All submodels are optimized using mean absolute error.
 2) Prediction submodels are aggregated into a super learner<sup>2,3</sup>, a linear combination of submodel predictions optimizing the same loss function. This is implemented as an elastic net model with no intercept and trained with stochastic gradient descent. The super learner is tuned using randomized paramter search, trained on the cross validation hold-outs from the full training sample. 
 
 \*All algorithms are implemented using *SciPy*, *Statsmodels*, and *SciKit-Learn*, with many more to come.
 
-### Evaluating the Super Learner and Submodel Performances
+### Evaluating Super Learner and Submodel Performances
 ------
 1) The normative super learner is used to make predictions in an 'atypical' sample displaying some phenotype-of-interest (eg. "symptomatic", "disease present"). Multiple atypical samples (phenotypes) can be predicted simultaneously, but should be labeled as separate groups in the CSV file (column 3)
 2) Predictions for the atypical sample/s are used to calculate phenotype-specific deviations from the normative prediction (e.g. BrainAGE<sup>4</sup>)
