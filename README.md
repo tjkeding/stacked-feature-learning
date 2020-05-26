@@ -31,7 +31,7 @@ Notes on CSV file format:
 - Columns 3...N contain the feature values, with the column header containing the feature label (assumed already preprocessed)
   
 **Output**:  
-{prefix}\_SLCoefs\_{PRED_VAR_NAME}\_cv{kCVParam}\_simsPI{numSimsPI}.csv
+{outputPrefix}\_SLCoefs\_{PRED_VAR_NAME}\_cv{kCVParam}\_simsPI{numSimsPI}.csv
 - Stacked generalizer (aka "Super Learner") coefficients learned for each train/test batch and submodel
 - Rows: batch/submodel combinations
 - Columns: batch number (BATCH); submodel (MODEL); coefficient (COEF)
