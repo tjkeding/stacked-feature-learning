@@ -57,7 +57,7 @@ The analysis pipeline consists of:
 ### Building and Training the Stacked Generalizer (Super Learner)
 ------
 1) Multiple machine learning algorithms\* (submodels) are tuned using randomized parameter search with cross-validation and trained on the current batches' full training set. Submodels currently available include elastic net trained with stochastic gradient decsent (glm), non-linear support vector machine (svm), multilayer perceptron (mlp), random forest (randForest), and gradient boosting machine (gradBoost). All submodels aside from the random forest and gradient boosting machines are built in a bagging (bootstrap aggregation) ensemble to ensure comparable performance to random forest and gradient boosting. All submodels are optimized using mean absolute error.
-2) Prediction submodels are aggregated into a super learner<sup>2,3</sup>, a linear combination of submodel predictions optimizing the same loss function, implemented as an elastic net model with no intercept and trained with stochastic gradient descent. The super learner is tuned using randomized paramter search, trained on the cross validation hold-outs from the full training sample, 
+2) Prediction submodels are aggregated into a super learner<sup>2,3</sup>, a linear combination of submodel predictions optimizing the same loss function. This is implemented as an elastic net model with no intercept and trained with stochastic gradient descent. The super learner is tuned using randomized paramter search, trained on the cross validation hold-outs from the full training sample. 
 
 \*All algorithms are implemented using *SciPy*, *Statsmodels*, and *SciKit-Learn*, with many more to come.
 
@@ -86,12 +86,6 @@ Special thanks to Justin Russell Ph.D., Josh Cisler Ph.D., and Jerry Zhu Ph.D. (
 
 
 # References
-**(1)** Marquand, A.F., Kia, S.M., Zabihi, M. et al. Conceptualizing mental disorders as deviations from normative functioning. *Molecular Psychiatry* 24, 1415–1424 (2019). DOI: 10.1038/s41380-019-0441-1
+**(1)** van der Laan, M.J., Polley, E.C., & Hubbard, A.E. Super learner. *Statistical Applications in Genetics and Molecular Biology*. 6,25 (2007). DOI: 10.2202/1544-6115.1309
 
-**(2)** van der Laan, M.J., Polley, E.C., & Hubbard, A.E. Super learner. *Statistical Applications in Genetics and Molecular Biology*. 6,25 (2007). DOI: 10.2202/1544-6115.1309
-
-**(3)** Naimi, A.I. & Balzer, L.B. Stacked Generalization: An Introduction to Super Learning. *European Journal of Epidemiology*. 33, 459–464 (2018). DOI: 10.1007/s10654-018-0390-z
-
-**(4)** Franke, K. & Gaser, C. Ten Years of BrainAGE as a Neuroimaging Biomarker of Brain Aging: What Insights Have We Gained? *Frontiers in Neurology*. 10, (2019). DOI: 10.3389/fneur.2019.00789
-
-**(5)** Saltelli, A. Sensitivity analysis for importance assessment. *Risk Analysis*. 22, 3:579-90 (2002). DOI: 10.1111/0272-4332.00040
+**(2)** Naimi, A.I. & Balzer, L.B. Stacked Generalization: An Introduction to Super Learning. *European Journal of Epidemiology*. 33, 459–464 (2018). DOI: 10.1007/s10654-018-0390-z
