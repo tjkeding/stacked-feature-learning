@@ -1,5 +1,5 @@
 # stacked-feature-learning
-A tool to build a stacked generalizer, evaluate it's predictions, and interogate informative features using permutation importance.
+A tool to build a stacked generalizer, evaluate its predictions, and interogate informative features using permutation importance.
 
 ## Implementation:
 
@@ -25,8 +25,8 @@ python3 stacked-feature-learning.py data.csv featureLearning/FL_batches50_sims10
 ```
 
 Notes on CSV file format:  
-- Rows should be one per instance/subject
-- Column 1 (index 0) contains the instance/subject ID
+- Rows are instances
+- Column 1 contains the instance ID
 - Column 2 contains the label to be predicted (regression: real, continuous; classification: positive integers with 0 = base class)
 - Columns 3...N contain the feature values, with the column header containing the feature label (assumed already preprocessed)
   
@@ -39,12 +39,12 @@ Notes on CSV file format:
 {outputPrefix}\_modelEvalTest\_{PRED_VAR_NAME}\_cv{kCVParam}\_simsPI{numSimsPI}.csv
 - Model evaluation metrics for each batch test set
 - Rows: batch/model/statistic combinations
-- Columns: batch number (BATCH); model names, including "SL" (super learner) and submodels (MODEL); statistic: for classification tasks, this includes balanced accuracy (optimized), raw accuracy, area under the ROC curve, f1 score, precision, recall, and average precision. For regression tasks, this includes mean absolute error (optimized), mean squared error, root mean squared error, correlation coefficient (r), and coefficient of determination (r2) (STAT); score for the statistic (SCORE); probability of the statistic: score <= chance expectations for mean absolute error, mean squared error, root mean squared error, score >= chance expectations for the rest (P)
+- Columns: batch number (BATCH); model names: including "SL" (super learner) and each submodel (MODEL); statistic: For classification tasks, this includes balanced accuracy (optimized), raw accuracy, area under the ROC curve, f1 score, precision, recall, and average precision. For regression tasks, this includes mean absolute error (optimized), mean squared error, root mean squared error, correlation coefficient (r), and coefficient of determination (r2) (STAT); score for the statistic (SCORE); probability of the statistic: score >= chance expectations for mean absolute error, mean squared error, root mean squared error, score <= chance expectations for the rest (P)
 
 {outputPrefix}\_modelEvalTrain\_{PRED_VAR_NAME}\_cv{kCVParam}\_simsPI{numSimsPI}.csv
 - Model evaluation metrics for each batch training set
 - Rows: batch/model/statistic combinations
-- Columns: batch number (BATCH); model names, including "SL" (super learner) and submodels (MODEL); statistic: for classification tasks, this includes balanced accuracy (optimized), raw accuracy, area under the ROC curve, f1 score, precision, recall, and average precision. For regression tasks, this includes mean absolute error (optimized), mean squared error, root mean squared error, correlation coefficient (r), and coefficient of determination (r2) (STAT); score for the statistic (SCORE); probability of the statistic: score <= chance expectations for mean absolute error, mean squared error, root mean squared error, score >= chance expectations for the rest (P)
+- Columns: batch number (BATCH); model names: including "SL" (super learner) and submodels (MODEL); statistic: For classification tasks, this includes balanced accuracy (optimized), raw accuracy, area under the ROC curve, f1 score, precision, recall, and average precision. For regression tasks, this includes mean absolute error (optimized), mean squared error, root mean squared error, correlation coefficient (r), and coefficient of determination (r2) (STAT); score for the statistic (SCORE); probability of the statistic: score >= chance expectations for mean absolute error, mean squared error, root mean squared error, score <= chance expectations for the rest (P)
 
 {outputPrefix}\_featImp\_{PRED_VAR_NAME}\_cv{kCVParam}
 - Feature importance statistics based on permutation importance
@@ -57,21 +57,20 @@ The analysis pipeline consists of:
 ### Building the Stacked Generalizer (Super Learner)
 ------
 1) Multiple machine learning algorithms\* (submodels) are tuned using randomized parameter search with cross-validation and trained on the current batches' full training set. Submodels currently available include elastic net trained with stochastic gradient decsent (glm), non-linear support vector machine (svm), multilayer perceptron (mlp), random forest (randForest), and gradient boosting machine (gradBoost). All submodels aside from the random forest and gradient boosting machines are built in a bagging (bootstrap aggregation) ensemble to ensure comparable performance to random forest and gradient boosting. All submodels are optimized using mean absolute error.
-2) Prediction submodels are aggregated into a super learner<sup>2,3</sup>, a linear combination of submodel predictions optimizing the same loss function. This is implemented as an elastic net model with no intercept and trained with stochastic gradient descent. The super learner is tuned using randomized paramter search, trained on the cross validation hold-outs from the full training sample. 
+2) Prediction submodels are aggregated into a super learner<sup>1,2</sup>, a linear combination of submodel predictions optimizing the same loss function. This is implemented as an elastic net model with no intercept and trained with stochastic gradient descent. The super learner is tuned using randomized paramter search and trained on the cross validation hold-outs from the full training sample. 
 
 \*All algorithms are implemented using *SciPy*, *Statsmodels*, and *SciKit-Learn*, with many more to come.
 
 ### Evaluating Super Learner and Submodel Performances
 ------
-1) The normative super learner is used to make predictions in an 'atypical' sample displaying some phenotype-of-interest (eg. "symptomatic", "disease present"). Multiple atypical samples (phenotypes) can be predicted simultaneously, but should be labeled as separate groups in the CSV file (column 3)
-2) Predictions for the atypical sample/s are used to calculate phenotype-specific deviations from the normative prediction (e.g. BrainAGE<sup>4</sup>)
-3) Atypical sample predictions and deviations are output.
+1) The optimized and trained super learner and submodels are scored on the full training set and test set. The super learner coefficients and all scores are printed to the command line and saved.
+2) To determine above-chance super learner and submodel performances, permutation testing is used. Here, {nSimsPI} number of permutations of the label column are created and scored with the super learner and each submodel. The best (non-permuted) score is compared to this distribution of permuted performances and probability values are printed to the command line and saved.
 
 ### Feature Importance Analysis using Permutation Importance
 ------
-1) A univariate noise perturbation sensitivity (NPS)<sup>5</sup> analysis is used to interogate the magnititue and direction of feature influence on atypical deviations from the normative model. NPS is a feature-wise metric representing how sensitive group-level deviations from normative prediction are to the atypical phenotype.
-2) Feature influence is thresholded using the paired-samples Wilcoxon test (perturbed deviation distribution vs. true deviation distribution) corrected for multiple comparisons using the Benjamini and Hochberg method. Features influencing non-significant differences in deviation distribution (based on the phenotype-of-interest OR by-chance during permutation testing) are considered non-influencial.
-3) All feature influence scores, direction of influence (increasing or decreasing deviations from the norm), and associated descriptive statistics (distribution medians, Wilcoxon statistic, effect size) are output locally.
+1) Permutation importance is a univariate feature importance metric that represents the decrease in model performance when the relationship between that feature's values and other features/the label are disturbed. This can be interpretted as the "influence" of that feature alone on making accurate predictions through the model.
+2) The permutation importance approach is limited by multicollinearity between features (i.e. importance is underestimated for features where the model continues to get the useful information from other related features). To circumvent this issue, an absolute Spearman rho correlation matrix is generated for the features. These pairwise relationships are input as the distance matrix to an OPTICS clustering algorithm (implemented in SciKit-Learn). OPTICS parameters are optimized through randomized parameter search and scored using the Dunn Index<sup>3</sup>. Features are either assigned to a cluster or left on their own (signified by cluster = -1), depending on the results of the clustering.
+3) Similar to permutation testing, {nSimsPI} rounds of permuting each feature column are used to disturb feature/label relationships. If a feature belongs to a cluster, all features in that cluster are permuted simultaneously. The mean change in performance of the super learner is assigned to that feature as its importance (for clustered features, this score is scaled to the number of features in that cluster). The best (non-permuted feature) score is then compared to these permuted feature scores to generate probability values for the importance score. All scores/statistics are saved to the output file.
 
 More detailed information to come! For specific questions, contact tjkeding@gmail.com.
 
@@ -89,3 +88,5 @@ Special thanks to Justin Russell Ph.D., Josh Cisler Ph.D., and Jerry Zhu Ph.D. (
 **(1)** van der Laan, M.J., Polley, E.C., & Hubbard, A.E. Super learner. *Statistical Applications in Genetics and Molecular Biology*. 6,25 (2007). DOI: 10.2202/1544-6115.1309
 
 **(2)** Naimi, A.I. & Balzer, L.B. Stacked Generalization: An Introduction to Super Learning. *European Journal of Epidemiology*. 33, 459–464 (2018). DOI: 10.1007/s10654-018-0390-z
+
+**(3)** Dunn, J.C. Well-Separated Clusters and Optimal Fuzzy Partitions. *Journal of Cybernetics*. 4(1): 95–104 (1974). DOI: 10.1080/01969727408546059
