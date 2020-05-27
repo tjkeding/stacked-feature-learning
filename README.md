@@ -1,5 +1,5 @@
 # stacked-feature-learning
-A tool to build a stacked generalizer, evaluate its predictions, and interogate informative features using permutation importance.
+A tool to build a stacked generalizer, evaluate its predictions, and interrogate informative features using permutation importance.
 
 ## Implementation:
 
