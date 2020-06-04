@@ -33,10 +33,10 @@ from sklearn.ensemble import RandomForestClassifier,RandomForestRegressor, \
 from sklearn.gaussian_process import GaussianProcessClassifier,GaussianProcessRegressor
 from sklearn.svm import SVC,SVR
 from sklearn.model_selection import ShuffleSplit,RandomizedSearchCV,StratifiedShuffleSplit,\
-	cross_val_score,StratifiedKFold,KFold,cross_val_predict
+	cross_val_score,StratifiedKFold,KFold,cross_val_predict,LeaveOneOut
 from sklearn.metrics import recall_score,precision_score,make_scorer,mean_squared_error,\
 	accuracy_score,mean_absolute_error,average_precision_score,precision_recall_curve,roc_curve,\
-	auc,f1_score,roc_auc_score,balanced_accuracy_score,make_scorer,r2_score,davies_bouldin_score
+	auc,f1_score,roc_auc_score,balanced_accuracy_score,make_scorer,r2_score
 from sklearn.neural_network import MLPRegressor,MLPClassifier
 from sklearn.neighbors import KNeighborsRegressor,KNeighborsClassifier
 from sklearn.linear_model import SGDRegressor,SGDClassifier,ElasticNet
@@ -51,7 +51,7 @@ import numpy as np
 import pandas as pd
 
 # SciPy:
-from scipy.stats import truncnorm,loguniform,uniform,spearmanr,pearsonr,norm
+from scipy.stats import truncnorm,loguniform,uniform,spearmanr,pearsonr,norm,rankdata
 
 # ------------ STOP WARNINGS ------------
 import warnings
@@ -387,30 +387,31 @@ def printProgressBar(iteration,total,prefix='',suffix='',decimals=1,length=100,f
 
 # --------------------
 
-def mergePoolOutput(currStep,poolOutput):
+def mergePoolOutput(choice,currStep,poolOutput):
 
 	toReturn = {}
 
 	# Merge parallel processing output for clustering
 	if currStep == "clustering":
-		poolOutput = list(filter(lambda a: a != None, poolOutput))
-		if poolOutput:
-    		for i, currDict in enumerate(poolOutput):	
-				if i==0:
-    				toReturn['DI'] = [0.0]*len(poolOutput)
-					toReturn['clustLabels'] = [0.0]*len(poolOutput)
-				toReturn['DI'][i] = currDict['DI']
-				toReturn['clustLabels'][i] = currDict['clustLabels']
+		for i, currDict in enumerate(poolOutput):	
+			if i==0:
+				toReturn['silCoef'] = [0.0]*len(poolOutput)
+				toReturn['clustLabels'] = [0.0]*len(poolOutput)
+			toReturn['silCoef'][i] = currDict['silCoef']
+			toReturn['clustLabels'][i] = currDict['clustLabels']
 
 	# Merge parallel processing output for model performance
 	elif currStep == "modelBuilding":
-		bestScore = -1*(sys.float_info.max)
+		bestScore = sys.float_info.max
+		if choice == 0:
+			bestScore = -1*(sys.float_info.max)
 		for mbDict in poolOutput:
-			if mbDict['score'] > bestScore:
+			if (mbDict['score'] > bestScore and choice == 0) or \
+				(mbDict['score'] < bestScore and choice == 1):
 				bestScore = mbDict['score']
 				toReturn['bestScore'] = bestScore
 				toReturn['bestParams'] = mbDict['params']
-		
+
 	# Merge parallel processing output for model performance
 	elif currStep == "nullScores":
 		toReturn['test'] = {}
@@ -478,8 +479,8 @@ def optimizeSubmodels(choice,submodels,trainDF,labelCol,startOfFeats,kCVParam,nS
 	# Vectorize the dataframes for training and testing
 	train = vectorizeDataFrame(trainDF,labelCol,startOfFeats)
 
-	# Containers for outputing
-	optModels ={}
+	# Containers for output
+	optModels={}
 	holdOuts={'label':train['y']}
 
     # Print progress bar for each model
@@ -488,61 +489,44 @@ def optimizeSubmodels(choice,submodels,trainDF,labelCol,startOfFeats,kCVParam,nS
 	# Iterate through submodels of the super learner
 	for i in range(0,len(submodels)):
 
-		# Define scoring function depending on what is being predicted
-		# Define folds for hold-out predictions
-		# Define hold out prediction metric for super learner training
-		rng1 = np.random.RandomState()
-		if choice == 0:
-			scoring = "balanced_accuracy"
-			method = "predict_proba"
-			skf = StratifiedKFold(n_splits=kCVParam,shuffle=True,random_state=rng1)
-		else:
-			scoring = "neg_mean_absolute_error"
-			method = "predict"
-			skf = KFold(n_splits=kCVParam,shuffle=True,random_state=rng1)
-
 		# Get current algo and probability distrubitions for parameter search
-		# Last input (training set size) only used by the multi-layer perceptron model
+		# Last input (training set size) only used by the multi-layer perceptron
 		modelParams = getModelParams(choice,submodels[i],trainDF.shape[1]-startOfFeats,trainDF.shape[0])
 		parameters = modelParams['parameters']
 		model = modelParams['model']
 		outModel = copy.deepcopy(model)
 
-		# Check to ensure predictions are not constant regardless of input
-		constant = True
-		while constant:
-    			
-			# Make another copy to test
-			testModel = copy.deepcopy(model)
+		# Use randomized search for cross-validated hyperparameter optimization
+		# Parameter options are sampled with replacement
+		# Process using multi-core parallel processing if available
+		optimize_pool = Parallel(n_jobs=numCores)(delayed(randSearch)\
+			(samp=currIter,choice=choice,searchType="models",train=train,\
+			model=model,parameters=parameters,kCVParam=kCVParam) for currIter in range(0,nSamp))
+		optimizeResults = mergePoolOutput(choice,"modelBuilding",optimize_pool)
 
-			# Use randomized search for cross-validated hyperparameter optimization
-			# Parameter options are sampled with replacement
-			# Process using multi-core parallel processing if available
-			optimize_pool = Parallel(n_jobs=numCores)(delayed(randSearch)\
-				(samp=currIter,searchType="models",train=train,scoring=scoring,\
-				skf=skf,model=model,parameters=parameters) for currIter in range(0,nSamp))
-			optimizeResults = mergePoolOutput("modelBuilding",optimize_pool)
+		# Clear the parallel processes after best params are saved
+		get_reusable_executor().shutdown(wait=False)
 
-			# Clear the parallel processes after best params are saved
-			get_reusable_executor().shutdown(wait=False)
-
-			# Set optimized model
-			testModel.set_params(**optimizeResults['bestParams'])
-			testModel.fit(train['x'],train['y'])
-
-			# Set flag to either continue searching or optimize the final model
-			if len(set(testModel.predict(train['x']))) > 1:
-				constant = False
-				outModel.set_params(**optimizeResults['bestParams'])
-
-		# Train and save the best model and copy it to generate holdouts
-		cvModel = copy.deepcopy(outModel)
+		# Set parameters for the best model, make a copy for generating hold-outs, and train
+		# For SVM classification, need a class assignment probability calibration step
+		outModel.set_params(**optimizeResults['bestParams'])
+		holdOutModel = copy.deepcopy(outModel)
 		optModels[submodels[i]] = outModel.fit(train['x'],train['y'])
+		if choice == 0 and submodels[i] == "svm":
+			holdOutModel = CalibratedClassifierCV(base_estimator=holdOutModel,method="sigmoid")
+			optModels[submodels[i]] = CalibratedClassifierCV(base_estimator=optModels[submodels[i]],\
+				method="sigmoid",cv="prefit").fit(train['x'],train['y'])
+			
+		# Choose hold-out prediction method:
+		# For classification, class assignment probabilities are used
+		if choice == 0:
+			predMethod = "predict_proba"
+		else:
+			predMethod = "predict"
 
-		# Save hold-outs for super learner
-		# CV train optimized model and save the hold-out predictions
-		# For classification, class assignment probabilities are used if cont features chosen (excluding 0 class)
-		preds = cross_val_predict(cvModel,X=train['x'],y=train['y'],cv=kCVParam,method=method,n_jobs=1)
+		# Generate hold-outs for the super learner
+		preds = cross_val_predict(holdOutModel,X=train['x'],y=train['y'],cv=kCVParam,\
+			n_jobs=numCores,method=predMethod)
 		if preds.ndim == 1 :
 			holdOuts[submodels[i]] = preds
 		else:
@@ -569,28 +553,28 @@ def getModelParams(choice,modelName,numFeats,trainingSize):
 	if modelName=="glm":
 
 		# alpha - constant multipled by the regularization term
-		alphas = loguniform(a=0.0001,b=1,scale=500)
+		alphas = loguniform(a=0.00001,b=1,scale=1000)
 
 		# tol - tolerance for stopping criterion
-		tols = loguniform(a=0.0001,b=1,scale=10)
+		tols = loguniform(a=0.0001,b=1,scale=100)
 
 		# eta0 - initial learning rate (depending on the learning rate type)
 		eta0s = loguniform(a=0.001,b=1,scale=1)
 		
 		# learning_rate - defines the update rule for stochastic gradient descent 
-		learning_rates = ["constant","optimal","invscaling","adaptive"]
+		learning_rates = ["optimal","invscaling","adaptive"]
 
 		# l1_ratio - the mixing parameter for elastic net (l1_ratio = 0: ridge, l1_ratio = 1: lasso)
 		l1_ratios = loguniform(a=0.01,b=1,scale=1)
 
 		# n_estimators - number of models to train (bootstrap aggregating)
-		n_estimators =  [5,10,15,20,25,30,35,40,45,50,60,70,80,90,100,150,200,250,300]
+		n_estimators =  [int(x) for x in np.linspace(start=10,stop=500,num=50)]
 
 		# max_feature - proportion of total features to sample for each estimator (bootstrap aggregating)
 		max_features = uniform(loc=0.1,scale=0.9)
 
 		# max_samples - proporation of training set to sample for each estimator (bootstrap aggregating)
-		max_samples = uniform(loc=0.5,scale=0.5)
+		max_samples = uniform(loc=0.1,scale=0.9)
 
 		# Combine parameters
 		parameters = {'base_estimator__alpha':alphas,'base_estimator__tol':tols,\
@@ -600,8 +584,8 @@ def getModelParams(choice,modelName,numFeats,trainingSize):
 
 		# Define model based on classification or regression
 		if(choice==0):
-			model = BaggingClassifier(base_estimator=SGDClassifier(loss="log",penalty="elasticnet",max_iter=10000,n_jobs=1,\
-				random_state=rng,class_weight="balanced"),\
+			model = BaggingClassifier(base_estimator=SGDClassifier(loss="log",penalty="elasticnet",\
+				max_iter=10000,n_jobs=1,random_state=rng,class_weight="balanced"),\
 				bootstrap_features=True,n_jobs=1,random_state=np.random.RandomState())
 		else:
 			model = BaggingRegressor(base_estimator=SGDRegressor(loss="epsilon_insensitive",epsilon=0.0,penalty="elasticnet",\
@@ -611,13 +595,13 @@ def getModelParams(choice,modelName,numFeats,trainingSize):
 	elif modelName=="mlp":
     		
 		# alpha - constant multipled by the regularization term
-		alphas = loguniform(a=0.0001,b=1,scale=500)
+		alphas = loguniform(a=0.00001,b=1,scale=1000)
 
 		# learning_rate_init - initial learning rate (depending on the learning rate type)
 		learning_rate_inits = loguniform(a=0.001,b=1,scale=1)
 
 		# tol - tolerance for stopping criterion
-		tols = loguniform(a=0.0001,b=1,scale=20)
+		tols = loguniform(a=0.00001,b=1,scale=100)
 		
 		# solver - learning algorithm for feed-forward and back propogation
 		solvers = ["adam","lbfgs"] 
@@ -626,19 +610,19 @@ def getModelParams(choice,modelName,numFeats,trainingSize):
 		activations = ["logistic", "tanh", "relu"]
 
 		# hidden_layer_sizes - number of neurons in the hidden layer (for this iteration, assumes single hidden layer)
-		hidden_layer_sizes = [(10,),(25,),(50,),(75,),(100,)]
+		hidden_layer_sizes = [(int(x),) for x in np.linspace(start=10,stop=100,num=10)]
 
 		# n_estimators - number of models to train (bootstrap aggregating)
 		# n_estimators has fewer options for the mlp because of computation time to build/fit estimators
 		# Any more than ~100 estimators will cause a significiant increase in time complexity
 		# that is untenable given our hardware and time constraints
-		n_estimators = [5,10,15,20,25,30,35,40,45,50,60,70,80,90,100]
+		n_estimators = [int(x) for x in np.linspace(start=10,stop=500,num=50)]
 
 		# max_feature - proportion of total features to sample for each estimator (bootstrap aggregating)
 		max_features = uniform(loc=0.05,scale=0.95)
 
 		# max_samples - proporation of training set to sample for each estimator (bootstrap aggregating)
-		max_samples = uniform(loc=0.25,scale=0.75)
+		max_samples = uniform(loc=0.1,scale=0.9)
 
 		# Combine parameters
 		parameters = {'base_estimator__hidden_layer_sizes':hidden_layer_sizes, 'base_estimator__alpha':alphas,\
@@ -678,30 +662,33 @@ def getModelParams(choice,modelName,numFeats,trainingSize):
 			model = KNeighborsRegressor(algorithm="auto")
 
 	elif modelName=="randForest":
+    		
+		# ccp_alpha - constant multipled by the regularization parameter (Minimal-Cost Complexity Pruning)
+		ccp_alphas = loguniform(a=0.00001,b=1,scale=1000)
 
 		# min_samples_split - the minimum number of remaining samples to split a node
-		min_samples_split = [2,3,4,5,6,7,8,9,10,15,20,25,30,35,40,45,50]
+		min_samples_split = [int(x) for x in np.linspace(start=2,stop=50,num=48)]
 		
 		# min_samples_leaf - the minimum number of remaining samples to remain a leaf/terminal node
-		min_samples_leaf = [2,3,4,5,6,7,8,9,10,15,20,25,30,35,40,45,50]
+		min_samples_leaf = [int(x) for x in np.linspace(start=2,stop=50,num=48)]
 
 		# max_depth - how many nodes deep a decision tree can grow
-		max_depths = [10,15,20,25,30,35,40,45,50,60,70,80,90,100]
+		max_depths = [int(x) for x in np.linspace(start=5,stop=100,num=20)]
 
 		# criterion - node splitting statistic used for decision tree (classification only)
 		criterions = ["gini","entropy"]
 
 		# n_estimators - number of models to train (bootstrap aggregating)
-		n_estimators = [25,50,75,100,125,150,175,200,225,250,275,300,350,400,450,500]
+		n_estimators = [int(x) for x in np.linspace(start=10,stop=500,num=50)]
 
 		# max_features - proportion of total features to sample for each estimator (bootstrap aggregating)
 		max_features = uniform(loc=0.05,scale=0.95)
 
 		# max_samples - proporation of training set to sample for each estimator (bootstrap aggregating)
-		max_samples = uniform(loc=0.25,scale=0.75)
+		max_samples = uniform(loc=0.1,scale=0.9)
 
 		# Combine parameters
-		parameters = {'min_samples_split':min_samples_split,'min_samples_leaf':min_samples_leaf,\
+		parameters = {'min_samples_split':min_samples_split,'min_samples_leaf':min_samples_leaf,'ccp_alpha':ccp_alphas,\
 			'n_estimators':n_estimators,'max_features':max_features,'max_depth':max_depths,'max_samples':max_samples}
 
 		# Define model based on classification or regression
@@ -714,45 +701,43 @@ def getModelParams(choice,modelName,numFeats,trainingSize):
 	elif modelName=="svm":
 
 		# C - 1/lambda (regularization parameter)
-		Cs = loguniform(a=0.0000001,b=1,scale=100)
+		Cs = loguniform(a=0.000001,b=1,scale=100)
 
 		# tol - tolerance for stopping criterion
-		tols = loguniform(a=0.00001,b=1,scale=10)
+		tols = loguniform(a=0.0001,b=1,scale=100)
 
 		# epsilon - defines the "epsilon tube", provides some slack (wiggle room) to the decision boundary
-		epsilons = loguniform(a=0.0001,b=1,scale=50)
+		epsilons = loguniform(a=0.000001,b=1,scale=1000)
+
+		# gamma - kernel coefficient when kernel = poly, rbf, or sigmoid
+		gammas = loguniform(a=0.0000001,b=1,scale=100)
 
 		# kernel - function for creating a non-linear decision hyperplane		
 		kernels = ["poly","rbf","sigmoid"]
 
 		# degree - degree of polynomial for the "poly" kernel
-		degrees = [2,3,4,5,6]
+		degrees = [2,3,4,5]
 
 		# n_estimators - number of models to train (bootstrap aggregating)
-		n_estimators = [5,10,15,20,25,30,35,40,45,50,60,70,80,90,100,150,200,250,300]
+		n_estimators = [int(x) for x in np.linspace(start=10,stop=500,num=50)]
 
 		# max_feature - proportion of total features to sample for each estimator (bootstrap aggregating)
 		max_features = uniform(loc=0.05,scale=0.95)
 
 		# max_samples - proporation of training set to sample for each estimator (bootstrap aggregating)
-		max_samples = uniform(loc=0.25,scale=0.75)
+		max_samples = uniform(loc=0.2,scale=0.8)
+
+		parameters = {'base_estimator__C':Cs,'base_estimator__tol':tols,'base_estimator__degree':degrees,\
+			'base_estimator__kernel':kernels,'base_estimator__gamma':gammas,\
+			'n_estimators':n_estimators,'max_features':max_features,'max_samples':max_samples}
 
 		# Define model based on classification or regression
 		if(choice==0):
-    		# Combine parameters
-			parameters = {'base_estimator__base_estimator__C':Cs,'base_estimator__base_estimator__tol':tols,\
-				'base_estimator__base_estimator__degree':degrees,'base_estimator__base_estimator__kernel':kernels,\
-				'n_estimators':n_estimators,'max_features':max_features,'max_samples':max_samples}
-
-			model = BaggingClassifier(base_estimator=CalibratedClassifierCV(SVC(random_state=rng,class_weight="balanced"),\
-				method="isotonic"),bootstrap_features=True,n_jobs=1,random_state=np.random.RandomState())
+			model = BaggingClassifier(base_estimator=SVC(random_state=rng,class_weight="balanced"),\
+				bootstrap_features=True,n_jobs=1,random_state=rng)
 		else:
-			# Combine parameters
-			parameters = {'base_estimator__C':Cs,'base_estimator__tol':tols,'base_estimator__degree':degrees,\
-				'base_estimator__kernel':kernels,'base_estimator__epsilon':epsilons,'n_estimators':n_estimators,\
-				'max_features':max_features,'max_samples':max_samples}
-
 			model = BaggingRegressor(base_estimator=SVR(),bootstrap_features=True,n_jobs=1,random_state=rng)
+			parameters['base_estimator__epsilon'] = epsilons
 
 	elif modelName=="gradBoost":
 
@@ -760,23 +745,26 @@ def getModelParams(choice,modelName,numFeats,trainingSize):
 		learning_rates = loguniform(a=0.001,b=1,scale=1)
 
 		# subsample - proporation of training set to sample for each estimator (bootstrap aggregating)
-		subsamples = uniform(loc=0.25,scale=0.75)
+		subsamples = uniform(loc=0.1,scale=0.9)
+
+		# ccp_alpha - constant multipled by the regularization parameter (Minimal-Cost Complexity Pruning)
+		ccp_alphas = loguniform(a=0.00001,b=1,scale=1000)
 
 		# min_samples_split - the minimum number of remaining samples to split a node
-		min_samples_split = [2,3,4,5,6,7,8,9,10,15,20,25,30,35,40,45,50]
+		min_samples_split = [int(x) for x in np.linspace(start=2,stop=50,num=48)]
 		
 		# min_samples_leaf - the minimum number of remaining samples to remain a leaf/terminal node
-		min_samples_leaf = [2,3,4,5,6,7,8,9,10,15,20,25,30,35,40,45,50]
+		min_samples_leaf = [int(x) for x in np.linspace(start=2,stop=50,num=48)]
 
 		# max_depth - how many nodes deep a tree can grow
-		max_depths = [2,3,4,5,6,7,8,9,10,11,12,13,14,15]
+		max_depths = [int(x) for x in np.linspace(start=2,stop=10,num=8)]
 		
 		# loss function to be optimized (different for classification vs. regression)
 		losses_class = ["deviance","exponential"]
 		losses_regress = ["ls", "lad", "huber", "quantile"]
 
 		# n_estimators - number of models to train (bootstrap aggregating)
-		n_estimators = [10,20,30,40,50,75,100,150,200,250,300,350,400,450,500]
+		n_estimators = [int(x) for x in np.linspace(start=10,stop=500,num=50)]
 
 		# max_features - proportion of total features to sample for each estimator (bootstrap aggregating)
 		max_features = uniform(loc=0.05,scale=0.95)
@@ -784,7 +772,7 @@ def getModelParams(choice,modelName,numFeats,trainingSize):
 		# Combine parameters
 		parameters = {'learning_rate':learning_rates,'n_estimators':n_estimators,'max_features':max_features, \
 			'subsample':subsamples,'max_depth':max_depths,'min_samples_split':min_samples_split,\
-			'min_samples_leaf':min_samples_leaf}
+			'min_samples_leaf':min_samples_leaf,'ccp_alpha':ccp_alphas}
 
 		# Define model based on classification or regression
 		if(choice==0):
@@ -830,19 +818,19 @@ def getModelParams(choice,modelName,numFeats,trainingSize):
 	elif modelName=="SL":
     		
 		# alpha - constant multipled by the regularization term
-		alphas = loguniform(a=0.00001,b=1,scale=500)
+		alphas = loguniform(a=0.00001,b=1,scale=1000)
 
 		# tol - tolerance for stopping criterion
-		tols = loguniform(a=0.00001,b=1,scale=10)
+		tols = loguniform(a=0.0001,b=1,scale=100)
 
 		# eta0 - initial learning rate (depending on the learning rate type)
 		eta0s = loguniform(a=0.001,b=1,scale=1)
 		
 		# learning_rate - defines the update rule for stochastic gradient descent 
-		learning_rates = ["constant","optimal", "invscaling", "adaptive"]
+		learning_rates = ["optimal", "invscaling", "adaptive"]
 
 		# l1_ratio - the mixing parameter for elastic net (l1_ratio = 0: ridge, l1_ratio = 1: lasso)
-		l1_ratios = loguniform(a=0.01,b=1,scale=1)
+		l1_ratios = loguniform(a=0.001,b=1,scale=1)
 
 		# Combine parameters
 		parameters = {'alpha':alphas,'tol':tols,'learning_rate':learning_rates, \
@@ -850,11 +838,11 @@ def getModelParams(choice,modelName,numFeats,trainingSize):
 
 		# Define model based on classification or regression
 		if(choice==0):
-			model = SGDClassifier(loss="log",penalty="elasticnet",max_iter=100000,n_jobs=1,random_state=rng,\
-				class_weight="balanced",fit_intercept=False)
+			model = SGDClassifier(loss="log",penalty="elasticnet",max_iter=100000,n_jobs=1,
+				random_state=rng,fit_intercept=False,class_weight="balanced")
 		else:
-			model = SGDRegressor(loss="squared_loss",penalty="elasticnet",max_iter=100000,random_state=rng,\
-				fit_intercept=False)
+			model = SGDRegressor(loss="epsilon_insensitive",epsilon=0.0,penalty="elasticnet",max_iter=100000,
+				random_state=rng,fit_intercept=False)
     		
 	elif modelName=="optics":
     	
@@ -880,36 +868,45 @@ def getModelParams(choice,modelName,numFeats,trainingSize):
 
 # --------------------
 
-def randSearch(samp,searchType,train,scoring,skf,model,parameters):
+def randSearch(samp,choice,searchType,train,model,parameters,kCVParam):
 	
 	# Get random sample of parameters to try, set them
 	randParams = getRandParams(parameters)
 	cvModel = copy.deepcopy(model)
 	cvModel.set_params(**randParams)
 
-	# Run search for model parameters
+	# Run search for submodel parameters
 	if searchType == "models":
     		
-		# Test parameters using cross-validation
-		scores = cross_val_score(cvModel,X=train['x'],y=train['y'],scoring=scoring,cv=skf,n_jobs=1,pre_dispatch=None)
+		# Define hold-out container
+		holdOuts = {}
 
+		# Designate splitter for cross-validation
+		if choice == 0:
+			skf = StratifiedKFold(n_splits=kCVParam,shuffle=True,random_state=np.random.RandomState())
+		else:
+			skf = KFold(n_splits=kCVParam,shuffle=True,random_state=np.random.RandomState())
+
+		# Test parameters using cross-validation
+		preds = cross_val_predict(cvModel,X=train['x'],y=train['y'],cv=skf,n_jobs=1,method="predict",pre_dispatch=None)
+
+		# Score the predictions (and get prediction probabilities for classification)
+		if choice == 0:
+			score = balanced_accuracy_score(train['y'],preds)
+		else:
+			score = mean_absolute_error(train['y'],preds)
+    		
 		# Return the mean score and parameters used
-		return {'score':np.mean(scores),'params':randParams}
-	
+		return {'score':score,'params':randParams}
+    		
 	# Run search for clustering parameters
 	elif searchType == "clustering":
 
 		# Run the clustering and get the predicted cluster labels
 		clustLabels = cvModel.fit_predict(train)
 
-		# Get the Dunn Index for this round of clustering
-		score = getClusteringScore(clustLabels,train)
-
-		# Scores may be "none" if the params for that round of clustering created 0 or 1 cluster(s)
-		if scores == None:
-			return None
-		else:
-			return {'DI':score,'clustLabels':clustLabels}
+		# Return the silhouette coefficient for this round of clustering
+		return {'silCoef':getClusteringScore(clustLabels,train),'clustLabels':clustLabels}
 
 # --------------------
 
@@ -938,19 +935,6 @@ def optimizeSuperLearner(choice,paramSet,kCVParam,nSamp,numCores):
 	# Vectorize evaluation dataset
 	holdOutVec = vectorizeDataFrame(paramSet['holdOutDF'],0,1)
 
-	# Scale the hold-outs and save the scaler to the super learner
-	scaler = StandardScaler().fit(holdOutVec['x'])
-	holdOutVec['x'] = scaler.transform(holdOutVec['x'])
-
-	# Define scoring function and train/test splits depending on what is being predicted
-	rng1 = np.random.RandomState()
-	if(choice == 0):
-		scoring = "balanced_accuracy"
-		skf = StratifiedKFold(n_splits=kCVParam,shuffle=True,random_state=rng1)
-	else:
-		scoring = "neg_mean_absolute_error"
-		skf = KFold(n_splits=kCVParam,shuffle=True,random_state=rng1)
-
 	# Uses same linear model framework (trained with stochastic gradient descent) as
 	# the GLM model - elastic net
 	sdgCoef = getModelParams(choice,"SL",paramSet['holdOutDF'].shape[1]-1,paramSet['holdOutDF'].shape[0])
@@ -958,38 +942,23 @@ def optimizeSuperLearner(choice,paramSet,kCVParam,nSamp,numCores):
 	params = sdgCoef['parameters']
 	outModel = copy.deepcopy(model)
 
-	# Check to ensure predictions are not constant regardless of input
-	constant = True
-	while constant:
-			
-		# Make another copy to test
-		testModel = copy.deepcopy(model)
+	# Use randomized search for cross-validated hyperparameter optimization
+	# Parameter options are sampled with replacement
+	# Process using multi-core parallel processing if available
+	optimize_pool = Parallel(n_jobs=numCores)(delayed(randSearch)\
+		(samp=currIter,choice=choice,searchType="models",train=holdOutVec,\
+		model=model,parameters=params,kCVParam=kCVParam) for currIter in range(0,nSamp))
+	optimizeResults = mergePoolOutput(choice,"modelBuilding",optimize_pool)
 
-		# Use randomized search for cross-validated hyperparameter optimization
-		# Parameter options are sampled with replacement
-		# Process using multi-core parallel processing if available
-		optimize_pool = Parallel(n_jobs=numCores)(delayed(randSearch)\
-			(samp=currIter,searchType="models",train=holdOutVec,scoring=scoring,\
-			skf=skf,model=model,parameters=params) for currIter in range(0,nSamp))
-		optimizeResults = mergePoolOutput("modelBuilding",optimize_pool)
-
-		# Clear the parallel processes after best params are saved
-		get_reusable_executor().shutdown(wait=False)
-
-		# Set optimized model
-		testModel.set_params(**optimizeResults['bestParams'])
-		testModel.fit(holdOutVec['x'],holdOutVec['y'])
-
-		# Set flag to either continue searching or optimize the final model
-		if len(set(testModel.predict(holdOutVec['x']))) > 1:
-			constant = False
-			outModel.set_params(**optimizeResults['bestParams'])
+	# Clear the parallel processes after best params are saved
+	get_reusable_executor().shutdown(wait=False)
 
 	# Train and save the optimized model
+	outModel.set_params(**optimizeResults['bestParams'])
 	outModel.fit(holdOutVec['x'],holdOutVec['y'])
 
 	# Create the new Super Learner and return
-	return {'models':paramSet['optModels'],'SL':outModel,'scaler':scaler}
+	return {'models':paramSet['optModels'],'SL':outModel}
 
 # ================================================== MODEL EVALUATION ===================================================
 
@@ -1063,7 +1032,6 @@ def predictWithSuperLearner(choice,superLearner,evalVec):
 
 	# Create new dataframe of predictions, vectorize, and scale
 	predVec = vectorizeDataFrame(pd.DataFrame.from_dict(preds),0,1)
-	predVec['x'] = superLearner['scaler'].transform(predVec['x'])
 	
 	# Feed predictions into super learner and make final prediction
 	if choice == 0:
@@ -1085,10 +1053,10 @@ def calcAboveChancePs(choice,numSimsPI,SL,normBatch,allScores,labelCol,startOfFe
 
 	# Evaluate the current model's scores versus chance performance
 	# Simulations: sample labels with replacement
-	eval_pool = Parallel(n_jobs=numCores,verbose=10)(delayed(getNullPerfDists)(currIter=currIter,\
+	eval_pool = Parallel(n_jobs=numCores)(delayed(getNullPerfDists)(currIter=currIter,\
 		modelNames=list(allScores['test'].keys()),choice=choice,SL=SL,normBatch=normBatch,labelCol=labelCol,\
 		startOfFeats=startOfFeats) for currIter in range(0,numSimsPI))
-	eval_merge = mergePoolOutput("nullScores",eval_pool)
+	eval_merge = mergePoolOutput(choice,"nullScores",eval_pool)
 
 	# Clear the parallel processes best params are saved
 	get_reusable_executor().shutdown(wait=False)
@@ -1209,10 +1177,10 @@ def runFeatureLearning(SL,choice,DFs,batchNum,nSamp,numSimsPI,labelCol,startOfFe
 	# Calculate feature importance score for each feature in the testDF
 	# Simulations: sample feature values with replacement and re-calculate performance
 	# Process using multi-core parallel processing if available
-	featImp_pool = Parallel(n_jobs=numCores,verbose=10)(delayed(calcFeatureImportance)(featIndex=currBatch,choice=choice,\
+	featImp_pool = Parallel(n_jobs=numCores)(delayed(calcFeatureImportance)(featIndex=currBatch,choice=choice,\
 		SL=SL,bestScore=bestScore,batches=featBatches,numSimsPI=numSimsPI,testDF=trainDF,labelCol=labelCol,
 		startOfFeats=startOfFeats) for currBatch in list(featBatches.keys()))
-	featImp_out = mergePoolOutput("featImp",featImp_pool)
+	featImp_out = mergePoolOutput(choice,"featImp",featImp_pool)
 
 	# Clear the parallel processes once scores are compiled
 	get_reusable_executor().shutdown(wait=False)
@@ -1241,22 +1209,15 @@ def getFeatureClusters(trainVec,labelCol,startOfFeats,samp,numCores):
 
 	# Process using multi-core parallel processing if available
 	clust_pool = Parallel(n_jobs=numCores)(delayed(randSearch)\
-		(samp=currIter,searchType="clustering",train=distRhoMat,scoring=None,\
-		skf=None,model=optics['model'],parameters=optics['parameters']) for currIter in range(0,samp))
-	clusterResults = mergePoolOutput("clustering",clust_pool)
+		(samp=currIter,choice=0,searchType="clustering",train=distRhoMat,\
+		model=optics['model'],parameters=optics['parameters'],kCVParam=1) for currIter in range(0,samp))
+	clusterResults = mergePoolOutput(0,"clustering",clust_pool)
 
 	# Clear the parallel processes once scores are compiled
 	get_reusable_executor().shutdown(wait=False)
 
-	# If feature clusters were identified
-	if clusterResults:
-    		
-		# Return the clustering labels with the maximum (best) Dunn Index
-		return clusterResults['clustLabels'][np.argmax(clusterResults['DI'])]
-
-	# If no feature clusters were identifed, return default
-	else:
-		return [-1]*len(trans_trainVec)
+	# Return the clustering labels with the maximum silhouette coefficient
+	return clusterResults['clustLabels'][np.argmax(clusterResults['silCoef'])]
 
 # --------------------
 
@@ -1265,50 +1226,48 @@ def getClusteringScore(clustLabels,trainMat):
 	# Get clusters to score and define outputs
 	clusts = np.unique(clustLabels)
 	clustsToUse = [x for x in clusts if x != -1]
-	maxWithinClustDist = 0.0
-	minBetweenClustDist = 0.0
 
 	# Skip if no clusts are obtained with given parameteres
 	if clustsToUse:
-    		
-		# Get number of clusters, skip if only a single cluster is identified
-		numClusts = len(clustsToUse)
-		if numClusts > 1:
 
-			# Get ave within and between cluster distances
-			withinClustDists = [0.0]*numClusts
-			betweenClustDists = [0.0]*numClusts
+		# Container for silhouette scores
+		silScores = [0.0]*len(trainMat)
 
-			# Iterate over each cluster
-			for i, clust in enumerate(clustsToUse):	
-				currWithinClustDists = []
-				currBetweenClustDists = []
+		# Get features belonging to the cluster
+		for feat1 in range(0,len(trainMat)):
+				
+			# if feature doesn't belong to a cluster, silhouette score = 0
+			if clustLabels[feat1] == -1:
+				silScores[feat1] = 0.0
 
-				# Get features belonging to the cluster
-				for feat1 in range(0,len(trainMat)):
-					for feat2 in range(0,len(trainMat)):
-						if feat1 != feat2:
-							if clustLabels[feat2]==clust and clustLabels[feat1]==clust:
-								currWithinClustDists.append(trainMat[feat1][feat2])
-							else:
-								currBetweenClustDists.append(trainMat[feat1][feat2])
+			# else, calculate the silhouette score for the point:
+			# Peter J. Rousseeuw (1987).
+			# "Silhouettes: a Graphical Aid to the Interpretation and Validation of Cluster Analysis".
+			# Computational and Applied Mathematics. 20: 53–65. doi:10.1016/0377-0427(87)90125-7
+			else:
+				withinDists, betweenDists = ([], )*2
+				for feat2 in range(0,len(trainMat)):
+					if feat1 != feat2:
+						if clustLabels[feat1] == clustLabels[feat2]:
+							withinDists.append(trainMat[feat1][feat2])
+						else:
+							betweenDists.append(trainMat[feat1][feat2])
+				withinStat = np.mean(withinDists)
+				betweenStat = np.min(betweenDists)
+				if withinStat > betweenStat:
+					silScores[feat1] = (betweenStat/withinStat) - 1
+				elif betweenStat > withinStat:
+					silScores[feat1] = 1 - (withinStat/betweenStat)
+				else:
+					silScores[feat1] = 0.0
 
-				withinClustDists[i] = np.mean(currWithinClustDists)
-				betweenClustDists[i] = np.mean(currBetweenClustDists)
+		# Return the silhouette coefficient for this round of clustering
+		return np.mean(silScores)
 
-			# Calculate maximum for the within cluster distance and minimum between cluster distance
-			# Used in calculating the Dunn Index for this round of clustering
-			# https://en.wikipedia.org/wiki/Dunn_index
-
-			maxWithinClustDist = np.max(withinClustDists)
-			minBetweenClustDist = np.min(betweenClustDists)
-
-	# Return the Dunn Index for this round of clustering
-	# If returning the worst score, return a placeholder
-	if aveWithinClustDist == 0.0 or aveBetweenClustDist == 0.0:
-		return None
 	else:
-		return minBetweenClustDist/maxWithinClustDist
+			
+		# Return the silhouette coefficient = 0 if no clusters identified
+		return 0.0
 
 # --------------------
 
@@ -1433,7 +1392,6 @@ if __name__ == '__main__':
 	kCVParam = readIn['kCVParam'] # Number of folds for cross-validation in randomized parameter search
 	nSampling = readIn['nSampling'] # Rounds of sampling for randomized parameter search
 	numSimsPI = readIn['numSimsPI'] # Number of permutation samples for labels (evaluation) and features (importance)
-
 	numCores = readIn['numCores'] # Number of cores to use for parallel processing
 	if numCores == -1:
 		numCores = mp.cpu_count()
@@ -1456,7 +1414,7 @@ if __name__ == '__main__':
 	# "glm" = Multi-class Logistic and Linear Regression with Bootstrap Aggregation
 	# "mlp" = Multilayer Perceptron (single hidden layer) Classification/Regression with Bootstrap Aggregation
 	# "gradBoost" = Gradient Boosting Classification/Regression
-	modelsToUse = ["mlp","gradBoost","randForest","glm","svm"]
+	modelsToUse = ["svm","mlp","gradBoost","randForest","glm"]
 
 	# Other available models not suitable for this problem (...with more to come):
 	# "gaussProc" = Gaussian Process Regression - too many features for the computational resources available 
@@ -1466,10 +1424,7 @@ if __name__ == '__main__':
 	batches_raw = getKFoldBatches(choice,labelCol,startOfFeats,allData,numSims,testProp)
 
 	# Define containers for output model and feature importance statistics
-	SLCoefsOut = list([])
-	testOut = list([])
-	trainOut = list([])
-	FLOut = list([])
+	SLCoefsOut, testOut, trainOut, FLOut = ([], )*4
 
 	# Iterate through batches
 	for count, key in enumerate(batches_raw):
@@ -1508,13 +1463,13 @@ if __name__ == '__main__':
 		print("")
 
 	# Create output dataframe for evaluation and feature importance distributions
-	saveDFtoFile(pd.concat(SLCoefsOut,ignore_index=True),\
+	saveDFtoFile(pd.concat(SLCoefsOut,ignore_index=True,sort=False),\
 		str(prefix+"_SLCoefs_"+allData.columns[labelCol]+"_cv"+str(kCVParam)+"_simsPI"+str(numSimsPI)+".csv"))
-	saveDFtoFile(pd.concat(testOut,ignore_index=True),\
+	saveDFtoFile(pd.concat(testOut,ignore_index=True,sort=False),\
 		str(prefix+"_modelEvalTest_"+allData.columns[labelCol]+"_cv"+str(kCVParam)+"_simsPI"+str(numSimsPI)+".csv"))
-	saveDFtoFile(pd.concat(trainOut,ignore_index=True),\
+	saveDFtoFile(pd.concat(trainOut,ignore_index=True,sort=False),\
 		str(prefix+"_modelEvalTrain_"+allData.columns[labelCol]+"_cv"+str(kCVParam)+"_simsPI"+str(numSimsPI)+".csv"))
-	saveDFtoFile(pd.concat(FLOut,ignore_index=True),\
+	saveDFtoFile(pd.concat(FLOut,ignore_index=True,sort=False),\
 		str(prefix+"_featImp_"+allData.columns[labelCol]+"_cv"+str(kCVParam)+"_simsPI"+str(numSimsPI)+".csv"))
 
 	print("-----------------------------------------------------------------------------")
