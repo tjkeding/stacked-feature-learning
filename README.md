@@ -21,7 +21,7 @@ python3 stacked-feature-learning.py <dataFileName> <outputPrefix> <numSims> <tes
    
 Example:  
 ```
-python3 stacked-feature-learning.py data.csv featureLearning/FL_batches50_sims1000 50 0.15 5 1000 1000 50
+python3 stacked-feature-learning.py data.csv featureLearning/FL_batches50_sims1000 50 0.15 20 1000 1000 50
 ```
 
 Notes on CSV file format:  
@@ -69,7 +69,7 @@ The analysis pipeline consists of:
 ### Feature Importance Analysis using Permutation Importance
 ------
 1) Permutation importance is a univariate feature importance metric that represents the decrease in model performance when the relationship between that feature's values and other features/the label are disturbed. This can be interpretted as the "influence" of that feature alone on making accurate predictions through the model.
-2) The permutation importance approach is limited by multicollinearity between features (i.e. importance is underestimated for features where the model continues to get the useful information from other related features). To circumvent this issue, an absolute Spearman rho correlation matrix is generated for the features. These pairwise relationships are input as the distance matrix to an OPTICS clustering algorithm (implemented in SciKit-Learn). OPTICS parameters are optimized through randomized parameter search and scored using the Dunn Index<sup>3</sup>. Features are either assigned to a cluster or left on their own (signified by cluster = -1), depending on the results of the clustering.
+2) The permutation importance approach is limited by multicollinearity between features (i.e. importance is underestimated for features where the model continues to get the useful information from other related features). To circumvent this issue, an absolute Spearman rho correlation matrix is generated for the features. Pairwise rho statistics are input as the distance matrix to an OPTICS clustering algorithm (implemented in SciKit-Learn). OPTICS parameters are optimized through randomized parameter search and scored using the Silhouette coefficient<sup>3</sup>. Features are either assigned to a cluster or left on their own (signified by cluster = -1), depending on the results of the clustering.
 3) Similar to permutation testing, {nSimsPI} rounds of permuting each feature column are used to disturb feature/label relationships. If a feature belongs to a cluster, all features in that cluster are permuted simultaneously. The mean change in performance of the super learner is assigned to that feature as its importance (for clustered features, this score is scaled to the number of features in that cluster). The best (non-permuted feature) score is then compared to these permuted feature scores to generate probability values for the importance score. All scores/statistics are saved to the output file.
 
 More detailed information to come! For specific questions, contact tjkeding@gmail.com.
@@ -89,4 +89,4 @@ Special thanks to Justin Russell Ph.D., Josh Cisler Ph.D., and Jerry Zhu Ph.D. (
 
 **(2)** Naimi, A.I. & Balzer, L.B. Stacked Generalization: An Introduction to Super Learning. *European Journal of Epidemiology*. 33, 459–464 (2018). DOI: 10.1007/s10654-018-0390-z
 
-**(3)** Dunn, J.C. Well-Separated Clusters and Optimal Fuzzy Partitions. *Journal of Cybernetics*. 4(1): 95–104 (1974). DOI: 10.1080/01969727408546059
+**(3)** Rousseeuw, P.J. Silhouettes: a Graphical Aid to the Interpretation and Validation of Cluster Analysis”. *Computational and Applied Mathematics*. 20: 53-65 (1987).
