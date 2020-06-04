@@ -393,12 +393,11 @@ def mergePoolOutput(choice,currStep,poolOutput):
 
 	# Merge parallel processing output for clustering
 	if currStep == "clustering":
-		for i, currDict in enumerate(poolOutput):	
-			if i==0:
-				toReturn['silCoef'] = [0.0]*len(poolOutput)
-				toReturn['clustLabels'] = [0.0]*len(poolOutput)
-			toReturn['silCoef'][i] = currDict['silCoef']
-			toReturn['clustLabels'][i] = currDict['clustLabels']
+    	bestScore = -1*sys.float_info.max
+		for currDict in poolOutput:
+    		if currDict['silCoef'] > bestScore:
+				bestScore = currDict['silCoef']
+				toReturn['bestLabels'] = currDict['clustLabels']
 
 	# Merge parallel processing output for model performance
 	elif currStep == "modelBuilding":
@@ -1217,7 +1216,7 @@ def getFeatureClusters(trainVec,labelCol,startOfFeats,samp,numCores):
 	get_reusable_executor().shutdown(wait=False)
 
 	# Return the clustering labels with the maximum silhouette coefficient
-	return clusterResults['clustLabels'][np.argmax(clusterResults['silCoef'])]
+	return clusterResults['bestLabels']
 
 # --------------------
 
