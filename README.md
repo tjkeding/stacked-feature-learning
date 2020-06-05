@@ -2,7 +2,7 @@
 A tool to build a stacked generalizer, evaluate its predictions, and interrogate informative features using permutation importance.
 **Please note:**
 1) This should not be used on datasets with fewer than ~200 instances of data (at least, not without substantive revision).
-2) The function 'getModelParams' may need to be modified if you're noticing poor training performance or large generalization error for your dataset/s; however, the parameter distributions provided should give good coverage for most situations.
+2) The function *getModelParams()* may need to be modified if you're noticing poor training performance or large generalization error for your dataset/s; however, the parameter distributions provided should give good coverage for most situations.
 3) This tool runs optimally with access to multiple cores for parallel computing. The input parameters *\<numSims\>*, *\<kCVParam\>*, *\<nSampling\>*, and *\<numSimsPI\>*, when given large numbers, will increase processing time considerably without parallelization. Please try reducing these values if you're not noticing any progress in the output. For example, using 100 cores with *\<kCVParam\>* = 10, *\<nSampling\>* = 1000, and *\<numSimsPI\>* = 1000, a single batch will take approximately an hour.
 
 ## Implementation:
