@@ -3,7 +3,7 @@ A tool to build a stacked generalizer, evaluate its predictions, and interrogate
 **Please note:**
 1) This should not be used on datasets with fewer than ~200 instances of data (at least, not without substantive revision).
 2) The function 'getModelParams' may need to be modified if you're noticing poor training performance or large generalization error for your dataset/s; however, the parameter distributions provided should give good coverage for most situations.
-3) This tool runs optimally with access to multiple cores for parallel computing. The input parameters *\<kCVParam\>*, *\<nSampling\>*, and *\<numSimsPI\>*, when given large numbers, will increase processing time considerably without parallelization. Please try reducing these values if you're not noticing any progress in the output. For example, using 100 cores with *\<kCVParam\>* = 10, *\<nSampling\>* = 1000, and *\<numSimsPI\>* = 1000, a single batch will take approximately an hour.
+3) This tool runs optimally with access to multiple cores for parallel computing. The input parameters *\<numSims\>*, *\<kCVParam\>*, *\<nSampling\>*, and *\<numSimsPI\>*, when given large numbers, will increase processing time considerably without parallelization. Please try reducing these values if you're not noticing any progress in the output. For example, using 100 cores with *\<kCVParam\>* = 10, *\<nSampling\>* = 1000, and *\<numSimsPI\>* = 1000, a single batch will take approximately an hour.
 
 ## Implementation:
 
@@ -35,22 +35,22 @@ Notes on CSV file format:
 - Columns 3...N contain the feature values, with the column header containing the feature label (assumed already preprocessed)
   
 **Output Files**:  
-*\<outputPrefix\>* \_SLCoefs\_{PRED_VAR_NAME}\_cv *\<kCVParam\>*\_simsPI *\<outputPrefix\>*.csv
+*\<outputPrefix\>*\_SLCoefs\_{PRED_VAR_NAME}\_cv *\<kCVParam\>*\_simsPI *\<numSimsPI\>*.csv
 - Stacked generalizer (aka "Super Learner") coefficients learned for each train/test batch and submodel
 - Rows: batch/submodel combinations
 - Columns: batch number (BATCH); submodel (MODEL); coefficient (COEF)
 
-{outputPrefix}\_modelEvalTest\_{PRED_VAR_NAME}\_cv{kCVParam}\_simsPI{numSimsPI}.csv
+*\<outputPrefix\>*\_modelEvalTest\_{PRED_VAR_NAME}\_cv *\<kCVParam\>*\_simsPI *\<numSimsPI\>*.csv
 - Model evaluation metrics for each batch test set
 - Rows: batch/model/statistic combinations
 - Columns: batch number (BATCH); model names: including "SL" (super learner) and each submodel (MODEL); statistic: For classification tasks, this includes balanced accuracy (optimized), raw accuracy, area under the ROC curve, f1 score, precision, recall, and average precision. For regression tasks, this includes mean absolute error (optimized), mean squared error, root mean squared error, correlation coefficient (r), and coefficient of determination (r2) (STAT); score for the statistic (SCORE); probability of the statistic: score >= chance expectations for mean absolute error, mean squared error, root mean squared error, score <= chance expectations for the rest (P)
 
-{outputPrefix}\_modelEvalTrain\_{PRED_VAR_NAME}\_cv{kCVParam}\_simsPI{numSimsPI}.csv
+*\<outputPrefix\>*\_modelEvalTrain\_{PRED_VAR_NAME}\_cv *\<kCVParam\>*\_simsPI *\<numSimsPI\>*.csv
 - Model evaluation metrics for each batch training set
 - Rows: batch/model/statistic combinations
 - Columns: batch number (BATCH); model names: including "SL" (super learner) and submodels (MODEL); statistic: For classification tasks, this includes balanced accuracy (optimized), raw accuracy, area under the ROC curve, f1 score, precision, recall, and average precision. For regression tasks, this includes mean absolute error (optimized), mean squared error, root mean squared error, correlation coefficient (r), and coefficient of determination (r2) (STAT); score for the statistic (SCORE); probability of the statistic: score >= chance expectations for mean absolute error, mean squared error, root mean squared error, score <= chance expectations for the rest (P)
 
-{outputPrefix}\_featImp\_{PRED_VAR_NAME}\_cv{kCVParam}
+*\<outputPrefix\>*\_featImp\_{PRED_VAR_NAME}\_cv *\<kCVParam\>*\_simsPI *\<numSimsPI\>*.csv
 - Feature importance statistics based on permutation importance
 - Rows: batch/feature combinations
 - Columns: batch number (BATCH); feature names (FEAT); feature cluster: to avoid issues with multicollinear features during permutation importance, feature clustering is performed. Integer indicating which cluster the feature belonged to for that batch (-1 = no cluster) (CLUST); permutation importance score: mean change in super learner perfomance across rounds of permutation (features belonging to a cluster are always permuted simultaneously and the assigned score for each is scaled to the number of features in that cluster) (SCORE); probability of the score: probability of performance change relative to the best (optimized, non-permuted) score (P) 
@@ -68,13 +68,13 @@ The analysis pipeline consists of:
 ### Evaluating Super Learner and Submodel Performances
 ------
 1) The optimized and trained super learner and submodels are scored on the full training set and test set. The super learner coefficients and all scores are printed to the command line and saved.
-2) To determine above-chance super learner and submodel performances, permutation testing is used. Here, {nSimsPI} number of permutations of the label column are created and scored with the super learner and each submodel. The best (non-permuted) score is compared to this distribution of permuted performances and probability values are printed to the command line and saved.
+2) To determine above-chance super learner and submodel performances, permutation testing is used. Here, *\<numSimsPI\>* number of permutations of the label column are created and scored with the super learner and each submodel. The best (non-permuted) score is compared to this distribution of permuted performances and probability values are printed to the command line and saved.
 
 ### Feature Importance Analysis using Permutation Importance
 ------
 1) Permutation importance is a univariate feature importance metric that represents the decrease in model performance when the relationship between that feature's values and other features/the label are disturbed. This can be interpretted as the "influence" of that feature alone on making accurate predictions through the model.
 2) The permutation importance approach is limited by multicollinearity between features (i.e. importance is underestimated for features where the model continues to get the useful information from other related features). To circumvent this issue, an absolute Spearman rho correlation matrix is generated for the features. Pairwise rho statistics are input as the distance matrix to an OPTICS clustering algorithm (implemented in SciKit-Learn). OPTICS parameters are optimized through randomized parameter search and scored using the Silhouette coefficient<sup>3</sup>. Features are either assigned to a cluster or left on their own (signified by cluster = -1), depending on the results of the clustering.
-3) Similar to permutation testing, {nSimsPI} rounds of permuting each feature column are used to disturb feature/label relationships. If a feature belongs to a cluster, all features in that cluster are permuted simultaneously. The mean change in performance of the super learner is assigned to that feature as its importance (for clustered features, this score is scaled to the number of features in that cluster). The best (non-permuted feature) score is then compared to these permuted feature scores to generate probability values for the importance score. All scores/statistics are saved to the output file.
+3) Similar to permutation testing, *\<numSimsPI\>* rounds of permuting each feature column are used to disturb feature/label relationships. If a feature belongs to a cluster, all features in that cluster are permuted simultaneously. The mean change in performance of the super learner is assigned to that feature as its importance (for clustered features, this score is scaled to the number of features in that cluster). The best (non-permuted feature) score is then compared to these permuted feature scores to generate probability values for the importance score. All scores/statistics are saved to the output file.
 
 More detailed information to come! For specific questions, contact tjkeding@gmail.com.
 
